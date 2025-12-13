@@ -472,7 +472,7 @@ return
   #  criar_thumbnail(titulo_video, thumbnail_path, VIDEO_TYPE)
 thumbnail_path = None
 
-    titulo = titulo_video[:60] if len(titulo_video) <= 60 else titulo_video[:57] + '...'
+        titulo = titulo_video[:60] if len(titulo_video) <= 60 else titulo_video[:57] + '...'
     if VIDEO_TYPE == 'short':
         titulo += ' #shorts'
 
@@ -519,5 +519,6 @@ thumbnail_path = None
             os.remove(os.path.join(ASSETS_DIR, file))
         except Exception:
             pass
+
 
 
