@@ -131,7 +131,7 @@ async def criar_audio_async(texto, output_file):
     voz = config.get('voz', 'pt-BR-FranciscaNeural')
     for tentativa in range(3):
         try:
-            communicate = edge_tts.Communicate(texto, voz, rate="+20%", pitch="+0Hz")
+            communicate = edge_tts.Communicate(texto, voz, rate="+1%", pitch="+0Hz")
             await asyncio.wait_for(communicate.save(output_file), timeout=120)
             print(f"✅ Edge TTS (tent {tentativa + 1})")
             return
