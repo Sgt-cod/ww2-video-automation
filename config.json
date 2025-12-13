@@ -1,0 +1,32 @@
+{
+  "tipo": "alien",
+  "canal": {
+    "nome": "Vorlathi de Solkara",
+    "descricao": "Transmissões de um ser distante do planeta Solkara"
+  },
+  
+  "duracao_minutos": 10,
+  "voz": "pt-BR-FranciscaNeural",
+  
+  "temas": [
+    "como é viver em Solkara",
+    "o sistema solar de Solkara",
+    "paisagens alienígenas do meu planeta",
+    "a temperatura extrema do meu mundo",
+    "a duração dos dias em Solkara",
+    "tecnologias avançadas da minha civilização",
+    "por que estou interessado na Terra",
+    "os recursos que procuramos na Terra",
+    "curiosidade sobre a vida humana",
+    "comparação entre tecnologia humana e alienígena",
+    "o que mais me surpreende nos humanos",
+    "minhas verdadeiras intenções com a Terra",
+    "como descobri o YouTube terrestre",
+    "a viagem intergaláctica até aqui",
+    "diferenças entre nossos mundos"
+  ],
+  
+  "palavras_chave_fixas": ["atmosphere", "space", "galaxy", "nebula", "cosmos"],
+  
+  "persona": "Vorlathi"
+}
