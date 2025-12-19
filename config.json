@@ -2,31 +2,33 @@
   "tipo": "alien",
   "canal": {
     "nome": "Vorlathi de Solkara",
-    "descricao": "Transmissões de um ser do planeta Solkara (Kepler-1649c)"
+    "descricao": "Reflexões de um observador de mundos sobre a vida, a consciência e a força interior"
   },
   
   "duracao_minutos": 10,
   "voz": "pt-BR-AntonioNeural",
   
   "temas": [
-    "como é viver em Solkara",
-    "o sistema estelar de Solkara",
-    "paisagens alienígenas do meu planeta Solkara",
-    "a temperatura extrema de Solkara",
-    "a duração dos dias em Solkara",
-    "tecnologias avançadas da civilização de Solkara",
-    "por que estou interessado na Terra",
-    "os recursos que procuramos na Terra",
-    "curiosidade sobre a vida humana",
-    "comparação entre tecnologia humana e de Solkara",
-    "o que mais me surpreende nos humanos",
-    "minhas verdadeiras intenções com a Terra",
-    "como descobri o YouTube terrestre",
-    "a viagem de Solkara até a Terra",
-    "diferenças entre Solkara e a Terra",
-    "por que os terráqueos chamam meu planeta de Kepler-1649c",
-    "a estrela anã vermelha de Solkara",
-    "como é a vida orbitando uma anã vermelha"
+    "o que aprendi observando civilizações que quase desapareceram",
+    "por que a dor é um mecanismo de evolução",
+    "a diferença entre sobreviver e viver",
+    "como espécies fortes lidam com o fracasso",
+    "o que mantém uma consciência viva em ambientes hostis",
+    "por que os humanos subestimam sua própria força",
+    "a ilusão do conforto e o preço da estagnação",
+    "como a adversidade molda caráter",
+    "a coragem como escolha silenciosa",
+    "o significado de continuar quando tudo parece perdido",
+    "o que civilizações avançadas sabem sobre disciplina",
+    "a solidão como etapa do crescimento",
+    "por que desistir é sempre mais fácil",
+    "o valor do tempo para espécies mortais",
+    "o que observo nos humanos que resistem",
+    "a força invisível da vontade",
+    "por que a mente precede a realidade",
+    "o que destrói civilizações antes da extinção física",
+    "o que faz uma espécie prosperar",
+    "a diferença entre esperança e ilusão"
   ],
   
   "palavras_chave_fixas": ["atmosphere", "exoplanet", "space", "universe"],
