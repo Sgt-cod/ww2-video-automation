@@ -1,19 +1,21 @@
-name: Create WWII History Video
+name: Daily WWII Video Production
 
 on:
-  repository_dispatch:
-    types: [create_video]
-  workflow_dispatch:
+  schedule:
+    # Executa 1x por dia às 10:00 UTC (7:00 BRT)
+    - cron: '0 10 * * *'
+  workflow_dispatch:  # Permite executar manualmente
     inputs:
-      video_id:
-        description: 'Video production ID'
-        required: true
-        type: string
+      skip_questions:
+        description: 'Pular perguntas e cancelar? (apenas para testes)'
+        required: false
+        type: boolean
+        default: false
 
 jobs:
   create-video:
     runs-on: ubuntu-latest
-    timeout-minutes: 120
+    timeout-minutes: 180  # 3 horas de timeout
     
     steps:
       - name: Checkout repository
@@ -36,20 +38,20 @@ jobs:
           pip install --upgrade pip
           pip install -r requirements.txt
 
-      - name: Create video production
+      - name: Run video production workflow
         env:
           TELEGRAM_BOT_TOKEN: ${{ secrets.TELEGRAM_BOT_TOKEN }}
           TELEGRAM_CHAT_ID: ${{ secrets.TELEGRAM_CHAT_ID }}
           YOUTUBE_CREDENTIALS: ${{ secrets.YOUTUBE_CREDENTIALS }}
-          OPENAI_API_KEY: ${{ secrets.OPENAI_API_KEY }}
-          VIDEO_ID: ${{ github.event.client_payload.video_id || github.event.inputs.video_id }}
-        run: python create_video.py
+          SKIP_QUESTIONS: ${{ github.event.inputs.skip_questions }}
+        run: python workflow_manager.py
 
       - name: Commit production logs
+        if: success()
         run: |
           git config --local user.email "action@github.com"
           git config --local user.name "GitHub Action"
-          git add productions/*.json
+          git add productions/*.json || true
           git diff --quiet && git diff --staged --quiet || git commit -m "📹 Video production completed - $(date +'%Y-%m-%d %H:%M')"
           git push || echo "Nothing to commit"
 
@@ -57,6 +59,6 @@ jobs:
         if: success()
         uses: actions/upload-artifact@v4
         with:
-          name: video-${{ github.event.client_payload.video_id || github.event.inputs.video_id }}
+          name: video-${{ github.run_number }}
           path: output/*.mp4
           retention-days: 7
