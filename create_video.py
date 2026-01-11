@@ -1,0 +1,588 @@
+#!/usr/bin/env python3
+"""
+WWII History Video Creator
+Handles audio generation, media collection, and video assembly
+Roda dentro do GitHub Actions - 100% gratuito
+"""
+
+import os
+import json
+import time
+import math
+import requests
+from datetime import datetime
+from pathlib import Path
+
+import edge_tts
+import asyncio
+from pydub import AudioSegment
+from moviepy.editor import *
+from google.oauth2.credentials import Credentials
+from googleapiclient.discovery import build
+from googleapiclient.http import MediaFileUpload
+
+# Configuration
+TELEGRAM_BOT_TOKEN = os.environ.get('TELEGRAM_BOT_TOKEN')
+TELEGRAM_CHAT_ID = os.environ.get('TELEGRAM_CHAT_ID')
+YOUTUBE_CREDENTIALS = os.environ.get('YOUTUBE_CREDENTIALS')
+
+# Directories
+PRODUCTIONS_DIR = Path('productions')
+OUTPUT_DIR = Path('output')
+SEGMENTS_DIR = Path('segments')
+MEDIA_DIR = Path('media')
+
+# Create directories
+for directory in [PRODUCTIONS_DIR, OUTPUT_DIR, SEGMENTS_DIR, MEDIA_DIR]:
+    directory.mkdir(exist_ok=True)
+
+class TelegramInterface:
+    """Handle Telegram communication"""
+    
+    def __init__(self):
+        self.base_url = f"https://api.telegram.org/bot{TELEGRAM_BOT_TOKEN}"
+        self.chat_id = TELEGRAM_CHAT_ID
+        self.update_offset = 0
+    
+    def send_message(self, text, reply_markup=None):
+        """Send text message"""
+        url = f"{self.base_url}/sendMessage"
+        data = {
+            'chat_id': self.chat_id,
+            'text': text,
+            'parse_mode': 'HTML'
+        }
+        if reply_markup:
+            data['reply_markup'] = json.dumps(reply_markup)
+        
+        try:
+            response = requests.post(url, json=data, timeout=10)
+            return response.json()
+        except Exception as e:
+            print(f"Error sending message: {e}")
+            return None
+    
+    def get_updates(self, timeout=30):
+        """Get updates from Telegram"""
+        url = f"{self.base_url}/getUpdates"
+        params = {
+            'offset': self.update_offset,
+            'timeout': timeout
+        }
+        
+        try:
+            response = requests.get(url, params=params, timeout=timeout+5)
+            result = response.json()
+            
+            if result.get('ok') and result.get('result'):
+                updates = result['result']
+                if updates:
+                    self.update_offset = updates[-1]['update_id'] + 1
+                return updates
+            return []
+        except:
+            return []
+    
+    def download_media(self, file_id, output_path):
+        """Download media file from Telegram"""
+        try:
+            # Get file info
+            file_info_url = f"{self.base_url}/getFile"
+            response = requests.get(file_info_url, params={'file_id': file_id}, timeout=10)
+            file_data = response.json()
+            
+            if not file_data.get('ok'):
+                return None
+            
+            file_path = file_data['result']['file_path']
+            download_url = f"https://api.telegram.org/file/bot{TELEGRAM_BOT_TOKEN}/{file_path}"
+            
+            # Download file
+            file_response = requests.get(download_url, timeout=30)
+            
+            with open(output_path, 'wb') as f:
+                f.write(file_response.content)
+            
+            print(f"✅ Media downloaded: {output_path}")
+            return output_path
+            
+        except Exception as e:
+            print(f"❌ Error downloading media: {e}")
+            return None
+    
+    def wait_for_media(self, segment_num, total_segments, timeout=1200):
+        """Wait for user to send media via Telegram"""
+        print(f"\n📸 Waiting for media {segment_num}/{total_segments}")
+        
+        self.send_message(
+            f"📸 <b>Media Request {segment_num}/{total_segments}</b>\n\n"
+            f"🎬 Send an image or short video for segment {segment_num}\n"
+            f"⏱️ This segment is approximately 30 seconds\n\n"
+            f"💡 <b>Tips:</b>\n"
+            f"• Use historical photos/footage\n"
+            f"• High resolution (1920x1080 preferred)\n"
+            f"• Related to the narration\n\n"
+            f"⏰ Waiting for {timeout//60} minutes..."
+        )
+        
+        start_time = time.time()
+        last_reminder = 0
+        
+        while time.time() - start_time < timeout:
+            # Reminder every 3 minutes
+            elapsed = time.time() - start_time
+            if int(elapsed) // 180 > last_reminder:
+                remaining = int((timeout - elapsed) / 60)
+                self.send_message(
+                    f"⏳ Still waiting for media {segment_num}/{total_segments}\n"
+                    f"⏰ {remaining} minutes remaining"
+                )
+                last_reminder = int(elapsed) // 180
+            
+            updates = self.get_updates(timeout=10)
+            
+            for update in updates:
+                if 'message' not in update:
+                    continue
+                
+                message = update['message']
+                
+                # Check for photo
+                if 'photo' in message:
+                    photo = message['photo'][-1]  # Get highest resolution
+                    file_id = photo['file_id']
+                    
+                    output_path = MEDIA_DIR / f"segment_{segment_num:03d}.jpg"
+                    result = self.download_media(file_id, output_path)
+                    
+                    if result:
+                        self.send_message(f"✅ Media {segment_num}/{total_segments} received!")
+                        return str(output_path), 'image'
+                
+                # Check for video
+                elif 'video' in message:
+                    video = message['video']
+                    file_id = video['file_id']
+                    
+                    output_path = MEDIA_DIR / f"segment_{segment_num:03d}.mp4"
+                    result = self.download_media(file_id, output_path)
+                    
+                    if result:
+                        self.send_message(f"✅ Media {segment_num}/{total_segments} received!")
+                        return str(output_path), 'video'
+                
+                # Check for document (for high-res images)
+                elif 'document' in message:
+                    document = message['document']
+                    mime_type = document.get('mime_type', '')
+                    
+                    if mime_type.startswith('image/'):
+                        file_id = document['file_id']
+                        ext = mime_type.split('/')[-1]
+                        
+                        output_path = MEDIA_DIR / f"segment_{segment_num:03d}.{ext}"
+                        result = self.download_media(file_id, output_path)
+                        
+                        if result:
+                            self.send_message(f"✅ Media {segment_num}/{total_segments} received!")
+                            return str(output_path), 'image'
+            
+            time.sleep(2)
+        
+        self.send_message(f"⏰ Timeout waiting for media {segment_num}")
+        return None, None
+
+class VideoProducer:
+    """Main video production class"""
+    
+    def __init__(self, video_data):
+        self.video_id = video_data['video_id']
+        self.script = video_data['script']
+        self.title = video_data['title']
+        self.description = video_data['description']
+        self.tags = video_data['tags']
+        self.telegram = TelegramInterface()
+        
+        self.production_file = PRODUCTIONS_DIR / f"{self.video_id}.json"
+    
+    async def generate_audio(self):
+        """Generate narration audio from script"""
+        print("\n🎙️ Generating narration audio...")
+        
+        audio_path = SEGMENTS_DIR / f"{self.video_id}_full_audio.mp3"
+        
+        # Use Edge TTS with American English voice
+        voice = "en-US-GuyNeural"  # Professional male American voice
+        # Alternative: "en-US-JennyNeural" for female voice
+        
+        try:
+            communicate = edge_tts.Communicate(
+                self.script,
+                voice,
+                rate="+0%",
+                pitch="+0Hz"
+            )
+            
+            await communicate.save(str(audio_path))
+            print(f"✅ Audio generated: {audio_path}")
+            
+            self.telegram.send_message(
+                "🎙️ <b>Audio Generated!</b>\n\n"
+                "Narration created successfully.\n"
+                "Now segmenting audio..."
+            )
+            
+            return str(audio_path)
+            
+        except Exception as e:
+            print(f"❌ Error generating audio: {e}")
+            raise
+    
+    def segment_audio(self, audio_path, segment_duration=30000):
+        """Split audio into 30-second segments"""
+        print(f"\n✂️ Segmenting audio into {segment_duration/1000}s chunks...")
+        
+        # Load audio
+        audio = AudioSegment.from_mp3(audio_path)
+        total_duration = len(audio)
+        
+        # Calculate number of segments
+        num_segments = math.ceil(total_duration / segment_duration)
+        
+        print(f"📊 Total duration: {total_duration/1000:.1f}s")
+        print(f"📊 Number of segments: {num_segments}")
+        
+        self.telegram.send_message(
+            f"✂️ <b>Audio Segmented</b>\n\n"
+            f"📊 Total duration: {total_duration/1000:.1f} seconds\n"
+            f"📊 Number of segments: {num_segments}\n\n"
+            f"Now I'll request media for each segment..."
+        )
+        
+        segments = []
+        
+        for i in range(num_segments):
+            start = i * segment_duration
+            end = min((i + 1) * segment_duration, total_duration)
+            
+            segment = audio[start:end]
+            segment_path = SEGMENTS_DIR / f"{self.video_id}_segment_{i+1:03d}.mp3"
+            
+            segment.export(str(segment_path), format="mp3")
+            
+            segments.append({
+                'index': i + 1,
+                'path': str(segment_path),
+                'duration': len(segment) / 1000,  # in seconds
+                'start_time': start / 1000,
+                'end_time': end / 1000
+            })
+            
+            print(f"  ✅ Segment {i+1}: {len(segment)/1000:.1f}s")
+        
+        return segments
+    
+    def collect_media(self, segments):
+        """Collect media for each segment via Telegram"""
+        print(f"\n📸 Collecting media for {len(segments)} segments...")
+        
+        self.telegram.send_message(
+            f"📸 <b>Starting Media Collection</b>\n\n"
+            f"📊 Total segments: {len(segments)}\n"
+            f"⏱️ ~30 seconds each\n\n"
+            f"I'll request media for each segment.\n"
+            f"Please send images or short videos in order.\n\n"
+            f"⏰ You have 20 minutes per segment."
+        )
+        
+        time.sleep(3)
+        
+        media_list = []
+        
+        for i, segment in enumerate(segments, 1):
+            media_path, media_type = self.telegram.wait_for_media(
+                i,
+                len(segments),
+                timeout=1200  # 20 minutes per segment
+            )
+            
+            if not media_path:
+                self.telegram.send_message(
+                    f"⚠️ No media received for segment {i}\n"
+                    f"Using placeholder..."
+                )
+                # Create black placeholder
+                media_path = self.create_placeholder(i)
+                media_type = 'image'
+            
+            media_list.append({
+                'segment_index': i,
+                'path': media_path,
+                'type': media_type,
+                'duration': segment['duration']
+            })
+        
+        self.telegram.send_message(
+            f"✅ <b>All Media Collected!</b>\n\n"
+            f"Received {len(media_list)} media files.\n"
+            f"Now creating the video..."
+        )
+        
+        return media_list
+    
+    def create_placeholder(self, segment_num):
+        """Create black placeholder image"""
+        from PIL import Image, ImageDraw, ImageFont
+        
+        img = Image.new('RGB', (1920, 1080), color=(20, 20, 20))
+        draw = ImageDraw.Draw(img)
+        
+        try:
+            font = ImageFont.truetype("/usr/share/fonts/truetype/dejavu/DejaVuSans-Bold.ttf", 80)
+        except:
+            font = ImageFont.load_default()
+        
+        text = f"Segment {segment_num}"
+        bbox = draw.textbbox((0, 0), text, font=font)
+        text_width = bbox[2] - bbox[0]
+        text_height = bbox[3] - bbox[1]
+        
+        position = ((1920 - text_width) // 2, (1080 - text_height) // 2)
+        draw.text(position, text, fill=(100, 100, 100), font=font)
+        
+        output_path = MEDIA_DIR / f"placeholder_{segment_num:03d}.jpg"
+        img.save(output_path)
+        
+        return str(output_path)
+    
+    def create_video(self, audio_segments, media_list):
+        """Create final video from segments and media"""
+        print("\n🎬 Creating final video...")
+        
+        clips = []
+        
+        for i, (audio_seg, media_info) in enumerate(zip(audio_segments, media_list)):
+            print(f"\n  Processing segment {i+1}/{len(audio_segments)}")
+            
+            # Load audio
+            audio_clip = AudioFileClip(audio_seg['path'])
+            duration = audio_clip.duration
+            
+            # Load media
+            if media_info['type'] == 'image':
+                # Create image clip with Ken Burns effect
+                img_clip = ImageClip(media_info['path'])
+                
+                # Resize to fit 1920x1080
+                img_clip = img_clip.resize(height=1080)
+                if img_clip.w < 1920:
+                    img_clip = img_clip.resize(width=1920)
+                
+                # Center crop
+                img_clip = img_clip.crop(
+                    x_center=img_clip.w/2,
+                    y_center=img_clip.h/2,
+                    width=1920,
+                    height=1080
+                )
+                
+                # Add subtle zoom effect (Ken Burns)
+                img_clip = img_clip.resize(lambda t: 1 + 0.05 * (t / duration))
+                img_clip = img_clip.set_duration(duration)
+                
+            else:  # video
+                video_clip = VideoFileClip(media_info['path'])
+                
+                # Resize and crop to 1920x1080
+                video_clip = video_clip.resize(height=1080)
+                if video_clip.w < 1920:
+                    video_clip = video_clip.resize(width=1920)
+                
+                video_clip = video_clip.crop(
+                    x_center=video_clip.w/2,
+                    y_center=video_clip.h/2,
+                    width=1920,
+                    height=1080
+                )
+                
+                # Loop if necessary
+                if video_clip.duration < duration:
+                    video_clip = video_clip.loop(duration=duration)
+                else:
+                    video_clip = video_clip.subclip(0, duration)
+                
+                img_clip = video_clip
+            
+            # Set audio
+            img_clip = img_clip.set_audio(audio_clip)
+            
+            # Add fade in/out
+            if i == 0:
+                img_clip = img_clip.fadein(1)
+            if i == len(audio_segments) - 1:
+                img_clip = img_clip.fadeout(1)
+            
+            clips.append(img_clip)
+            
+            print(f"    ✅ Segment {i+1} processed ({duration:.1f}s)")
+        
+        # Concatenate all clips
+        print("\n  Concatenating segments...")
+        final_video = concatenate_videoclips(clips, method="compose")
+        
+        # Export
+        output_path = OUTPUT_DIR / f"{self.video_id}.mp4"
+        
+        print(f"\n  💾 Rendering final video...")
+        print(f"     Duration: {final_video.duration:.1f}s")
+        print(f"     Resolution: 1920x1080")
+        
+        self.telegram.send_message(
+            "🎬 <b>Creating Final Video</b>\n\n"
+            f"⏱️ Duration: {final_video.duration:.1f} seconds\n"
+            "📹 Resolution: 1920x1080\n"
+            "🎞️ Rendering... This may take a while."
+        )
+        
+        final_video.write_videofile(
+            str(output_path),
+            fps=24,
+            codec='libx264',
+            audio_codec='aac',
+            preset='medium',
+            bitrate='5000k',
+            threads=4
+        )
+        
+        # Close clips
+        final_video.close()
+        for clip in clips:
+            clip.close()
+        
+        print(f"\n✅ Video created: {output_path}")
+        return str(output_path)
+    
+    def upload_to_youtube(self, video_path):
+        """Upload video to YouTube"""
+        print("\n📤 Uploading to YouTube...")
+        
+        self.telegram.send_message(
+            "📤 <b>Uploading to YouTube</b>\n\n"
+            "Please wait..."
+        )
+        
+        try:
+            # Load credentials
+            creds_dict = json.loads(YOUTUBE_CREDENTIALS)
+            credentials = Credentials.from_authorized_user_info(creds_dict)
+            youtube = build('youtube', 'v3', credentials=credentials)
+            
+            # Prepare metadata
+            body = {
+                'snippet': {
+                    'title': self.title[:100],  # YouTube limit
+                    'description': self.description,
+                    'tags': self.tags,
+                    'categoryId': '22'  # People & Blogs (or '27' for Education)
+                },
+                'status': {
+                    'privacyStatus': 'public',
+                    'selfDeclaredMadeForKids': False
+                }
+            }
+            
+            # Upload
+            media = MediaFileUpload(video_path, resumable=True)
+            request = youtube.videos().insert(
+                part='snippet,status',
+                body=body,
+                media_body=media
+            )
+            
+            print("  Uploading...")
+            response = None
+            while response is None:
+                status, response = request.next_chunk()
+                if status:
+                    progress = int(status.progress() * 100)
+                    print(f"    Progress: {progress}%")
+            
+            video_id = response['id']
+            url = f"https://www.youtube.com/watch?v={video_id}"
+            
+            print(f"\n✅ Video uploaded successfully!")
+            print(f"🔗 URL: {url}")
+            
+            # Send notification
+            self.telegram.send_message(
+                f"🎉 <b>VIDEO PUBLISHED!</b>\n\n"
+                f"📺 {self.title}\n"
+                f"🔗 {url}\n\n"
+                f"✅ Successfully uploaded to YouTube!\n\n"
+                f"🎬 Production complete!"
+            )
+            
+            return url
+            
+        except Exception as e:
+            print(f"❌ Upload failed: {e}")
+            self.telegram.send_message(f"❌ YouTube upload failed: {e}")
+            raise
+    
+    async def run(self):
+        """Main production workflow"""
+        try:
+            self.telegram.send_message(
+                f"🎬 <b>Production Started</b>\n\n"
+                f"🎯 Video: {self.title}\n"
+                f"🆔 ID: {self.video_id}\n\n"
+                f"Starting audio generation..."
+            )
+            
+            # Step 1: Generate audio
+            audio_path = await self.generate_audio()
+            
+            # Step 2: Segment audio
+            audio_segments = self.segment_audio(audio_path)
+            
+            # Step 3: Collect media
+            media_list = self.collect_media(audio_segments)
+            
+            # Step 4: Create video
+            self.telegram.send_message("🎥 Creating final video...")
+            video_path = self.create_video(audio_segments, media_list)
+            
+            # Step 5: Upload to YouTube
+            url = self.upload_to_youtube(video_path)
+            
+            print("\n✅ Production completed successfully!")
+            return True
+            
+        except Exception as e:
+            print(f"\n❌ Production failed: {e}")
+            self.telegram.send_message(f"❌ <b>Production Failed</b>\n\n{e}")
+            raise
+
+def run_production(video_data):
+    """Main entry point called by workflow_manager"""
+    print("="*60)
+    print("🎬 WWII History Video Production")
+    print("="*60)
+    
+    print(f"\n🆔 Video ID: {video_data['video_id']}")
+    print(f"📝 Title: {video_data['title']}")
+    print(f"📊 Script: {video_data['word_count']} words")
+    print()
+    
+    async def run_async():
+        producer = VideoProducer(video_data)
+        return await producer.run()
+    
+    try:
+        result = asyncio.run(run_async())
+        return result
+    except Exception as e:
+        print(f"❌ Error: {e}")
+        import traceback
+        traceback.print_exc()
+        return False
