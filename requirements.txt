@@ -2,7 +2,7 @@ edge-tts==7.0.0
 pydub==0.25.1
 moviepy==1.0.3
 requests==2.31.0
-pillow==10.0.0
+pillow==9.5.0
 google-api-python-client==2.108.0
 google-auth==2.25.2
 google-auth-oauthlib==1.2.0
