@@ -428,18 +428,27 @@ class VideoProducer:
         try:
             font = ImageFont.truetype("/usr/share/fonts/truetype/dejavu/DejaVuSans-Bold.ttf", 80)
         except:
-            font = ImageFont.load_default()
+            try:
+                font = ImageFont.truetype("/usr/share/fonts/truetype/liberation/LiberationSans-Bold.ttf", 80)
+            except:
+                font = ImageFont.load_default()
         
         text = f"Segment {segment_num}"
-        bbox = draw.textbbox((0, 0), text, font=font)
-        text_width = bbox[2] - bbox[0]
-        text_height = bbox[3] - bbox[1]
+        
+        # Usar textbbox se disponível (Pillow >= 8.0.0)
+        try:
+            bbox = draw.textbbox((0, 0), text, font=font)
+            text_width = bbox[2] - bbox[0]
+            text_height = bbox[3] - bbox[1]
+        except AttributeError:
+            # Fallback para versões antigas do Pillow
+            text_width, text_height = draw.textsize(text, font=font)
         
         position = ((1920 - text_width) // 2, (1080 - text_height) // 2)
         draw.text(position, text, fill=(100, 100, 100), font=font)
         
         output_path = MEDIA_DIR / f"placeholder_{segment_num:03d}.jpg"
-        img.save(output_path)
+        img.save(output_path, quality=95)
         
         return str(output_path)
     
