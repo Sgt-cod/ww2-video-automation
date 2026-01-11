@@ -36,6 +36,10 @@ MEDIA_DIR = Path('media')
 for directory in [PRODUCTIONS_DIR, OUTPUT_DIR, SEGMENTS_DIR, MEDIA_DIR]:
     directory.mkdir(exist_ok=True)
 
+class WorkflowCancelled(Exception):
+    """Exception raised when workflow is cancelled by user"""
+    pass
+
 class TelegramInterface:
     """Handle Telegram communication"""
     
@@ -43,6 +47,67 @@ class TelegramInterface:
         self.base_url = f"https://api.telegram.org/bot{TELEGRAM_BOT_TOKEN}"
         self.chat_id = TELEGRAM_CHAT_ID
         self.update_offset = 0
+        self.cancelled = False
+        self.cancel_flag_file = Path('productions/cancel_flag.json')
+    
+    def check_for_cancel(self):
+        """Verifica se usuário enviou comando /cancel"""
+        # Verificar arquivo de flag primeiro
+        if self.cancel_flag_file.exists():
+            print("🛑 Flag de cancelamento detectada!")
+            return True
+        
+        try:
+            url = f"{self.base_url}/getUpdates"
+            params = {
+                'offset': self.update_offset,
+                'timeout': 0
+            }
+            
+            response = requests.get(url, params=params, timeout=5)
+            result = response.json()
+            
+            if not result.get('ok'):
+                return False
+            
+            updates = result.get('result', [])
+            
+            for update in updates:
+                self.update_offset = update['update_id'] + 1
+                
+                if 'message' in update:
+                    message = update['message']
+                    
+                    if str(message['chat']['id']) != str(self.chat_id):
+                        continue
+                    
+                    text = message.get('text', '').strip().lower()
+                    
+                    if text in ['/cancel', '/cancelar', 'cancel', 'cancelar']:
+                        print("🛑 Comando de cancelamento recebido!")
+                        self.cancelled = True
+                        
+                        cancel_data = {
+                            'cancelled': True,
+                            'timestamp': datetime.now().isoformat(),
+                            'reason': 'User requested cancellation'
+                        }
+                        
+                        with open(self.cancel_flag_file, 'w') as f:
+                            json.dump(cancel_data, f, indent=2)
+                        
+                        self.send_message(
+                            "🛑 <b>WORKFLOW CANCELADO</b>\n\n"
+                            "A produção foi cancelada com sucesso."
+                        )
+                        
+                        return True
+            
+            return False
+            
+        except Exception as e:
+            print(f"⚠️ Erro ao verificar cancelamento: {e}")
+            return False
     
     def send_message(self, text, reply_markup=None):
         """Send text message"""
@@ -122,20 +187,29 @@ class TelegramInterface:
             f"• Use historical photos/footage\n"
             f"• High resolution (1920x1080 preferred)\n"
             f"• Related to the narration\n\n"
-            f"⏰ Waiting for {timeout//60} minutes..."
+            f"⏰ Waiting for {timeout//60} minutes...\n\n"
+            f"🛑 Use /cancel to cancel production"
         )
         
         start_time = time.time()
         last_reminder = 0
+        last_cancel_check = 0
         
         while time.time() - start_time < timeout:
-            # Reminder every 3 minutes
+            # Verificar cancelamento a cada 5 segundos
             elapsed = time.time() - start_time
+            if elapsed - last_cancel_check >= 5:
+                if self.check_for_cancel():
+                    raise WorkflowCancelled("Workflow cancelled by user")
+                last_cancel_check = elapsed
+            
+            # Reminder every 3 minutes
             if int(elapsed) // 180 > last_reminder:
                 remaining = int((timeout - elapsed) / 60)
                 self.send_message(
                     f"⏳ Still waiting for media {segment_num}/{total_segments}\n"
-                    f"⏰ {remaining} minutes remaining"
+                    f"⏰ {remaining} minutes remaining\n\n"
+                    f"💡 Use /cancel to cancel"
                 )
                 last_reminder = int(elapsed) // 180
             
@@ -147,9 +221,23 @@ class TelegramInterface:
                 
                 message = update['message']
                 
+                # Verificar cancelamento
+                text = message.get('text', '').strip().lower()
+                if text in ['/cancel', '/cancelar', 'cancel', 'cancelar']:
+                    self.cancelled = True
+                    cancel_data = {
+                        'cancelled': True,
+                        'timestamp': datetime.now().isoformat()
+                    }
+                    with open(self.cancel_flag_file, 'w') as f:
+                        json.dump(cancel_data, f, indent=2)
+                    
+                    self.send_message("🛑 <b>WORKFLOW CANCELADO</b>")
+                    raise WorkflowCancelled("Workflow cancelled by user")
+                
                 # Check for photo
                 if 'photo' in message:
-                    photo = message['photo'][-1]  # Get highest resolution
+                    photo = message['photo'][-1]
                     file_id = photo['file_id']
                     
                     output_path = MEDIA_DIR / f"segment_{segment_num:03d}.jpg"
@@ -171,7 +259,7 @@ class TelegramInterface:
                         self.send_message(f"✅ Media {segment_num}/{total_segments} received!")
                         return str(output_path), 'video'
                 
-                # Check for document (for high-res images)
+                # Check for document
                 elif 'document' in message:
                     document = message['document']
                     mime_type = document.get('mime_type', '')
@@ -563,7 +651,7 @@ class VideoProducer:
             self.telegram.send_message(f"❌ <b>Production Failed</b>\n\n{e}")
             raise
 
-def run_production(video_data):
+def run_production(video_data, collector=None):
     """Main entry point called by workflow_manager"""
     print("="*60)
     print("🎬 WWII History Video Production")
@@ -581,6 +669,14 @@ def run_production(video_data):
     try:
         result = asyncio.run(run_async())
         return result
+    except WorkflowCancelled:
+        print("\n🛑 PRODUÇÃO CANCELADA PELO USUÁRIO")
+        if collector:
+            collector.send_message(
+                "🛑 <b>Produção Cancelada</b>\n\n"
+                "O workflow foi encerrado conforme solicitado."
+            )
+        return False
     except Exception as e:
         print(f"❌ Error: {e}")
         import traceback
