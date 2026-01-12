@@ -559,8 +559,119 @@ class VideoProducer:
         print(f"\n✅ Video created: {output_path}")
         return str(output_path)
     
-    def upload_to_youtube(self, video_path):
-        """Upload video to YouTube"""
+    def request_thumbnail(self, timeout=1200):
+        """Request thumbnail from user via Telegram"""
+        print("\n🖼️ Requesting thumbnail...")
+        
+        self.telegram.send_message(
+            "🖼️ <b>THUMBNAIL CUSTOMIZADA</b>\n\n"
+            "📺 <b>Última etapa antes do upload!</b>\n\n"
+            "📤 Envie agora a imagem da thumbnail:\n\n"
+            "💡 <b>Recomendações:</b>\n"
+            "• Resolução mínima: 1280x720 (HD)\n"
+            "• Ideal: 1920x1080 (Full HD)\n"
+            "• Formato: JPG ou PNG\n"
+            "• Texto grande e legível\n"
+            "• Cores vibrantes\n"
+            "• Relacionada ao vídeo\n\n"
+            f"⏰ Você tem {timeout//60} minutos\n\n"
+            "⏭️ Digite <b>/skip</b> para usar thumbnail automática do YouTube"
+        )
+        
+        start_time = time.time()
+        last_reminder = 0
+        
+        while time.time() - start_time < timeout:
+            # Check for cancellation
+            elapsed = time.time() - start_time
+            if elapsed - last_reminder >= 5:
+                if self.telegram.check_for_cancel():
+                    raise WorkflowCancelled("Workflow cancelled by user")
+            
+            # Reminder every 3 minutes
+            if int(elapsed) // 180 > last_reminder:
+                remaining = int((timeout - elapsed) / 60)
+                self.telegram.send_message(
+                    f"⏳ Ainda aguardando thumbnail...\n"
+                    f"⏰ {remaining} minutos restantes\n\n"
+                    f"⏭️ Digite /skip para usar thumbnail automática"
+                )
+                last_reminder = int(elapsed) // 180
+            
+            updates = self.telegram.get_updates(timeout=10)
+            
+            for update in updates:
+                if 'message' not in update:
+                    continue
+                
+                message = update['message']
+                
+                # Check for skip command
+                text = message.get('text', '').strip().lower()
+                if text in ['/skip', 'skip', '/pular', 'pular']:
+                    self.telegram.send_message(
+                        "⏭️ <b>Thumbnail Pulada</b>\n\n"
+                        "Usando thumbnail automática do YouTube."
+                    )
+                    return None
+                
+                # Check for cancellation
+                if text in ['/cancel', '/cancelar', 'cancel', 'cancelar']:
+                    self.telegram.cancelled = True
+                    cancel_data = {
+                        'cancelled': True,
+                        'timestamp': datetime.now().isoformat()
+                    }
+                    with open(self.telegram.cancel_flag_file, 'w') as f:
+                        json.dump(cancel_data, f, indent=2)
+                    
+                    self.telegram.send_message("🛑 <b>WORKFLOW CANCELADO</b>")
+                    raise WorkflowCancelled("Workflow cancelled by user")
+                
+                # Check for photo
+                if 'photo' in message:
+                    photo = message['photo'][-1]
+                    file_id = photo['file_id']
+                    
+                    output_path = OUTPUT_DIR / 'thumbnail_custom.jpg'
+                    result = self.telegram.download_media(file_id, output_path)
+                    
+                    if result:
+                        self.telegram.send_message(
+                            "✅ <b>Thumbnail Recebida!</b>\n\n"
+                            "Fazendo upload do vídeo com sua thumbnail..."
+                        )
+                        return str(output_path)
+                
+                # Check for document (high-res image)
+                elif 'document' in message:
+                    document = message['document']
+                    mime_type = document.get('mime_type', '')
+                    
+                    if mime_type.startswith('image/'):
+                        file_id = document['file_id']
+                        ext = mime_type.split('/')[-1]
+                        
+                        output_path = OUTPUT_DIR / f'thumbnail_custom.{ext}'
+                        result = self.telegram.download_media(file_id, output_path)
+                        
+                        if result:
+                            self.telegram.send_message(
+                                "✅ <b>Thumbnail Recebida!</b>\n\n"
+                                "Fazendo upload do vídeo com sua thumbnail..."
+                            )
+                            return str(output_path)
+            
+            time.sleep(2)
+        
+        self.telegram.send_message(
+            "⏰ <b>Timeout</b>\n\n"
+            "Usando thumbnail automática do YouTube."
+        )
+        return None
+    
+    def upload_to_youtube(self, video_path, thumbnail_path=None):
+        """Upload video to YouTube with optional custom thumbnail"""
         print("\n📤 Uploading to YouTube...")
         
         self.telegram.send_message(
@@ -588,7 +699,7 @@ class VideoProducer:
                 }
             }
             
-            # Upload
+            # Upload video
             media = MediaFileUpload(video_path, resumable=True)
             request = youtube.videos().insert(
                 part='snippet,status',
@@ -596,7 +707,7 @@ class VideoProducer:
                 media_body=media
             )
             
-            print("  Uploading...")
+            print("  Uploading video...")
             response = None
             while response is None:
                 status, response = request.next_chunk()
@@ -610,14 +721,44 @@ class VideoProducer:
             print(f"\n✅ Video uploaded successfully!")
             print(f"🔗 URL: {url}")
             
-            # Send notification
-            self.telegram.send_message(
-                f"🎉 <b>VIDEO PUBLISHED!</b>\n\n"
-                f"📺 {self.title}\n"
-                f"🔗 {url}\n\n"
-                f"✅ Successfully uploaded to YouTube!\n\n"
-                f"🎬 Production complete!"
-            )
+            # Upload thumbnail if provided
+            if thumbnail_path and os.path.exists(thumbnail_path):
+                print("\n🖼️ Uploading custom thumbnail...")
+                try:
+                    thumbnail_media = MediaFileUpload(thumbnail_path)
+                    youtube.thumbnails().set(
+                        videoId=video_id,
+                        media_body=thumbnail_media
+                    ).execute()
+                    print("✅ Thumbnail uploaded!")
+                    
+                    self.telegram.send_message(
+                        f"🎉 <b>VIDEO PUBLISHED!</b>\n\n"
+                        f"📺 {self.title}\n"
+                        f"🔗 {url}\n\n"
+                        f"✅ Video uploaded to YouTube!\n"
+                        f"✅ Custom thumbnail applied!\n\n"
+                        f"🎬 Production complete!"
+                    )
+                except Exception as e:
+                    print(f"⚠️ Thumbnail upload failed: {e}")
+                    self.telegram.send_message(
+                        f"🎉 <b>VIDEO PUBLISHED!</b>\n\n"
+                        f"📺 {self.title}\n"
+                        f"🔗 {url}\n\n"
+                        f"✅ Video uploaded!\n"
+                        f"⚠️ Thumbnail failed (using auto thumbnail)\n\n"
+                        f"🎬 Production complete!"
+                    )
+            else:
+                self.telegram.send_message(
+                    f"🎉 <b>VIDEO PUBLISHED!</b>\n\n"
+                    f"📺 {self.title}\n"
+                    f"🔗 {url}\n\n"
+                    f"✅ Video uploaded to YouTube!\n"
+                    f"📸 Using automatic thumbnail\n\n"
+                    f"🎬 Production complete!"
+                )
             
             return url
             
@@ -649,8 +790,11 @@ class VideoProducer:
             self.telegram.send_message("🎥 Creating final video...")
             video_path = self.create_video(audio_segments, media_list)
             
-            # Step 5: Upload to YouTube
-            url = self.upload_to_youtube(video_path)
+            # Step 5: Request thumbnail (NEW!)
+            thumbnail_path = self.request_thumbnail(timeout=1200)  # 20 minutes
+            
+            # Step 6: Upload to YouTube with thumbnail
+            url = self.upload_to_youtube(video_path, thumbnail_path)
             
             print("\n✅ Production completed successfully!")
             return True
