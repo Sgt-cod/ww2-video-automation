@@ -3,6 +3,7 @@
 Workflow Manager - Coleta informações via Telegram e inicia produção
 Roda dentro do GitHub Actions, sem necessidade de servidor externo
 FUNCIONALIDADE: Permite cancelar workflow via comando /cancel
+FUNCIONALIDADE: Suporta roteiros longos (múltiplas partes + arquivo TXT)
 """
 
 import os
@@ -97,18 +98,15 @@ class TelegramCollector:
                 if 'message' in update:
                     message = update['message']
                     
-                    # Verificar se é do chat correto
                     if str(message['chat']['id']) != str(self.chat_id):
                         continue
                     
-                    # Verificar comando de cancelamento
                     text = message.get('text', '').strip().lower()
                     
                     if text in ['/cancel', '/cancelar', 'cancel', 'cancelar']:
                         print("🛑 Comando de cancelamento recebido!")
                         self.cancelled = True
                         
-                        # Criar arquivo de flag
                         cancel_data = {
                             'cancelled': True,
                             'timestamp': datetime.now().isoformat(),
@@ -141,14 +139,12 @@ class TelegramCollector:
         last_cancel_check = 0
         
         while time.time() - start_time < timeout:
-            # Verificar cancelamento a cada 5 segundos
             elapsed = time.time() - start_time
             if elapsed - last_cancel_check >= check_cancel_interval:
                 if self.check_for_cancel():
                     raise WorkflowCancelled("Workflow cancelled by user")
                 last_cancel_check = elapsed
             
-            # Enviar lembrete a cada 2 minutos
             if int(elapsed) // 120 > last_reminder:
                 remaining = int((timeout - elapsed) / 60)
                 self.send_message(
@@ -158,7 +154,6 @@ class TelegramCollector:
                 )
                 last_reminder = int(elapsed) // 120
             
-            # Buscar updates
             try:
                 url = f"{self.base_url}/getUpdates"
                 params = {
@@ -181,28 +176,21 @@ class TelegramCollector:
                     if 'message' in update:
                         message = update['message']
                         
-                        # Verificar se é do chat correto
                         if str(message['chat']['id']) != str(self.chat_id):
                             continue
                         
-                        # Pegar texto
                         text = message.get('text', '').strip()
                         
-                        # Verificar se é comando de cancelamento
                         if text.lower() in ['/cancel', '/cancelar', 'cancel', 'cancelar']:
                             self.cancelled = True
                             cancel_data = {
                                 'cancelled': True,
-                                'timestamp': datetime.now().isoformat(),
-                                'reason': 'User requested cancellation'
+                                'timestamp': datetime.now().isoformat()
                             }
                             with open(CANCEL_FLAG_FILE, 'w') as f:
                                 json.dump(cancel_data, f, indent=2)
                             
-                            self.send_message(
-                                "🛑 <b>WORKFLOW CANCELADO</b>\n\n"
-                                "A produção foi cancelada com sucesso."
-                            )
+                            self.send_message("🛑 <b>WORKFLOW CANCELADO</b>")
                             raise WorkflowCancelled("Workflow cancelled by user")
                         
                         if text:
@@ -218,6 +206,128 @@ class TelegramCollector:
         print("⏰ Timeout - sem resposta")
         return None
     
+    def collect_script_multipart(self, timeout=900):
+        """Coleta roteiro com suporte a múltiplas partes e arquivo TXT"""
+        print("\n📝 Coletando roteiro (suporte a múltiplas partes e arquivo)")
+        
+        self.send_message(
+            "4️⃣ <b>ROTEIRO DE NARRAÇÃO</b>\n\n"
+            "Você pode enviar de 2 formas:\n\n"
+            "📝 <b>Opção 1: Texto Direto</b>\n"
+            "Cole o roteiro como mensagem(ns).\n"
+            "Se for longo, envie em partes e digite: <b>PRONTO</b>\n\n"
+            "📄 <b>Opção 2: Arquivo TXT (RECOMENDADO)</b>\n"
+            "Envie arquivo .txt como documento.\n"
+            "Sem limite de tamanho!\n\n"
+            "💡 Ou digite /cancel para cancelar"
+        )
+        
+        roteiro_partes = []
+        start_time = time.time()
+        
+        while time.time() - start_time < timeout:
+            remaining_time = int(timeout - (time.time() - start_time))
+            
+            if remaining_time <= 0:
+                break
+            
+            try:
+                url = f"{self.base_url}/getUpdates"
+                params = {
+                    'offset': self.update_offset,
+                    'timeout': min(30, remaining_time)
+                }
+                
+                response = requests.get(url, params=params, timeout=35)
+                result = response.json()
+                
+                if not result.get('ok'):
+                    time.sleep(3)
+                    continue
+                
+                updates = result.get('result', [])
+                
+                for update in updates:
+                    self.update_offset = update['update_id'] + 1
+                    
+                    if 'message' not in update:
+                        continue
+                    
+                    message = update['message']
+                    
+                    if str(message['chat']['id']) != str(self.chat_id):
+                        continue
+                    
+                    # VERIFICAR ARQUIVO TXT
+                    if 'document' in message:
+                        document = message['document']
+                        file_name = document.get('file_name', '')
+                        
+                        if file_name.endswith('.txt'):
+                            print(f"📄 Arquivo TXT detectado: {file_name}")
+                            self.send_message("📄 Arquivo recebido! Processando...")
+                            
+                            try:
+                                file_id = document['file_id']
+                                file_info_url = f"{self.base_url}/getFile"
+                                file_resp = requests.get(file_info_url, params={'file_id': file_id}, timeout=10)
+                                file_data = file_resp.json()
+                                
+                                if file_data.get('ok'):
+                                    file_path = file_data['result']['file_path']
+                                    download_url = f"https://api.telegram.org/file/bot{TELEGRAM_BOT_TOKEN}/{file_path}"
+                                    
+                                    content_resp = requests.get(download_url, timeout=30)
+                                    roteiro_completo = content_resp.text
+                                    
+                                    return roteiro_completo
+                            except Exception as e:
+                                print(f"❌ Erro ao baixar arquivo: {e}")
+                                self.send_message(f"❌ Erro ao processar arquivo. Envie como texto.")
+                                continue
+                    
+                    # VERIFICAR TEXTO
+                    text = message.get('text', '').strip()
+                    
+                    if not text:
+                        continue
+                    
+                    # Cancelamento
+                    if text.lower() in ['/cancel', '/cancelar', 'cancel', 'cancelar']:
+                        raise WorkflowCancelled("User cancelled")
+                    
+                    # Finalização
+                    if text.upper() in ['PRONTO', 'DONE', 'FIM', 'FINISH']:
+                        if not roteiro_partes:
+                            self.send_message("⚠️ Nenhum roteiro foi enviado ainda!")
+                            continue
+                        
+                        roteiro_completo = '\n'.join(roteiro_partes)
+                        return roteiro_completo
+                    
+                    # Adicionar parte
+                    roteiro_partes.append(text)
+                    palavras_atuais = sum(len(p.split()) for p in roteiro_partes)
+                    
+                    self.send_message(
+                        f"✅ <b>Parte {len(roteiro_partes)} recebida!</b>\n\n"
+                        f"📊 Palavras até agora: {palavras_atuais}\n\n"
+                        f"➕ Envie mais partes se necessário\n"
+                        f"✔️ Ou digite <b>PRONTO</b> quando terminar"
+                    )
+            
+            except WorkflowCancelled:
+                raise
+            except Exception as e:
+                print(f"⚠️ Erro: {e}")
+                time.sleep(5)
+        
+        # Timeout ou finalizado
+        if roteiro_partes:
+            return '\n'.join(roteiro_partes)
+        
+        return None
+    
     def collect_video_info(self):
         """Coleta título, descrição e roteiro via Telegram"""
         print("\n" + "="*60)
@@ -225,11 +335,9 @@ class TelegramCollector:
         print("="*60)
         
         try:
-            # Limpar flag de cancelamento anterior
             if CANCEL_FLAG_FILE.exists():
                 CANCEL_FLAG_FILE.unlink()
             
-            # Mensagem inicial
             self.send_message(
                 "🎬 <b>Produção Diária de Vídeo WWII</b>\n\n"
                 "Vamos criar um novo vídeo histórico!\n\n"
@@ -240,7 +348,7 @@ class TelegramCollector:
             
             time.sleep(2)
             
-            # Coletar TÍTULO
+            # TÍTULO
             self.send_message(
                 "1️⃣ <b>TÍTULO DO VÍDEO</b>\n\n"
                 "Envie o título do seu vídeo sobre WWII.\n\n"
@@ -257,7 +365,7 @@ class TelegramCollector:
             self.send_message(f"✅ Título recebido!\n\n<b>{titulo}</b>")
             time.sleep(2)
             
-            # Coletar DESCRIÇÃO
+            # DESCRIÇÃO
             self.send_message(
                 "2️⃣ <b>DESCRIÇÃO DO VÍDEO</b>\n\n"
                 "Envie a descrição que aparecerá no YouTube.\n\n"
@@ -271,13 +379,10 @@ class TelegramCollector:
                 self.send_message("❌ Tempo esgotado. Produção cancelada.")
                 return None
             
-            self.send_message(
-                f"✅ Descrição recebida!\n\n"
-                f"<i>{descricao[:100]}...</i>"
-            )
+            self.send_message(f"✅ Descrição recebida!\n\n<i>{descricao[:100]}...</i>")
             time.sleep(2)
             
-            # Coletar TAGS
+            # TAGS
             self.send_message(
                 "3️⃣ <b>TAGS DO VÍDEO</b>\n\n"
                 "Envie as tags separadas por vírgula.\n\n"
@@ -295,39 +400,27 @@ class TelegramCollector:
             self.send_message(f"✅ Tags recebidas: {len(tags)} tags")
             time.sleep(2)
             
-            # Coletar ROTEIRO
-            self.send_message(
-                "4️⃣ <b>ROTEIRO DE NARRAÇÃO</b>\n\n"
-                "Agora envie o roteiro completo que será narrado no vídeo.\n\n"
-                "📝 <b>Dicas:</b>\n"
-                "• Escreva em inglês\n"
-                "• Use frases claras para narração\n"
-                "• Conte uma história envolvente\n"
-                "• Não mencione elementos visuais\n\n"
-                "⏱️ Você tem 15 minutos para enviar.\n\n"
-                "💡 Ou envie /cancel para cancelar"
-            )
-            
-            roteiro = self.wait_for_message(timeout=900)  # 15 minutos
+            # ROTEIRO (NOVA FUNÇÃO)
+            roteiro = self.collect_script_multipart(timeout=900)
             
             if not roteiro:
-                self.send_message("❌ Tempo esgotado. Produção cancelada.")
+                self.send_message("❌ Roteiro não recebido. Produção cancelada.")
                 return None
             
             palavra_count = len(roteiro.split())
-            tempo_estimado = palavra_count / 150  # ~150 palavras por minuto
+            tempo_estimado = palavra_count / 150
+            preview = roteiro[:200] + '...' if len(roteiro) > 200 else roteiro
             
             self.send_message(
                 f"✅ <b>Roteiro recebido!</b>\n\n"
-                f"📊 Estatísticas:\n"
+                f"📊 <b>Estatísticas:</b>\n"
                 f"• Palavras: {palavra_count}\n"
                 f"• Duração estimada: {tempo_estimado:.1f} minutos\n"
                 f"• Segmentos (~30s): {int(tempo_estimado * 2)}\n\n"
-                f"🎬 Iniciando produção...\n\n"
-                f"🛑 Você ainda pode cancelar usando /cancel"
+                f"📝 <b>Prévia:</b>\n<i>{preview}</i>\n\n"
+                f"🎬 Iniciando produção..."
             )
             
-            # Salvar dados coletados
             video_data = {
                 'video_id': f"video_{int(time.time())}",
                 'timestamp': datetime.now().isoformat(),
@@ -340,12 +433,11 @@ class TelegramCollector:
                 'estimated_duration': tempo_estimado
             }
             
-            # Salvar em arquivo
             production_file = PRODUCTIONS_DIR / f"{video_data['video_id']}.json"
             with open(production_file, 'w', encoding='utf-8') as f:
                 json.dump(video_data, f, indent=2, ensure_ascii=False)
             
-            print(f"\n✅ Informações coletadas e salvas: {production_file}")
+            print(f"\n✅ Informações coletadas: {production_file}")
             
             return video_data
         
@@ -361,7 +453,6 @@ def main():
     print(f"⏰ Iniciado em: {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}")
     print()
     
-    # Verificar variáveis de ambiente
     if not TELEGRAM_BOT_TOKEN:
         print("❌ TELEGRAM_BOT_TOKEN não configurado!")
         return 1
@@ -374,7 +465,6 @@ def main():
     print()
     
     try:
-        # Coletar informações via Telegram
         collector = TelegramCollector()
         video_data = collector.collect_video_info()
         
@@ -388,16 +478,13 @@ def main():
         print(f"⏱️ Duração estimada: {video_data['estimated_duration']:.1f} min")
         print()
         
-        # Agora importar e executar a produção do vídeo
         print("="*60)
         print("🎥 INICIANDO PRODUÇÃO DO VÍDEO")
         print("="*60)
         print()
         
-        # Importar módulo de criação de vídeo
         import create_video
         
-        # Executar produção (que também pode ser cancelada)
         success = create_video.run_production(video_data, collector)
         
         if success:
@@ -409,21 +496,19 @@ def main():
     
     except WorkflowCancelled:
         print("\n🛑 WORKFLOW CANCELADO PELO USUÁRIO")
-        return 2  # Exit code 2 para cancelamento
+        return 2
     
     except Exception as e:
         print(f"\n❌ Erro durante a produção: {e}")
         import traceback
         traceback.print_exc()
         
-        # Notificar erro via Telegram
         try:
             collector = TelegramCollector()
             collector.send_message(
                 f"❌ <b>Erro na Produção</b>\n\n"
-                f"Ocorreu um erro durante a criação do vídeo:\n\n"
-                f"<code>{str(e)}</code>\n\n"
-                f"Verifique os logs no GitHub Actions."
+                f"Ocorreu um erro:\n\n"
+                f"<code>{str(e)}</code>"
             )
         except:
             pass
